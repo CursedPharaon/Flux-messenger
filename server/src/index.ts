@@ -46,8 +46,22 @@ app.use('/api/upload', uploadRoutes);
 // Socket
 setupSocket(io);
 
-// 404
-app.use((_req,res)=> res.status(404).json({ error:'Not found' }));
+// Serve frontend static files (client/dist) - for single-service Render deploy
+const clientDistPath = path.join(__dirname, '../../client/dist');
+app.use(express.static(clientDistPath));
+
+// Fallback route for React Router - serve index.html for any non-API route
+app.get('*', (req, res) => {
+  // If it's an API route that wasn't matched, return JSON 404
+  if (req.path.startsWith('/api/') || req.path === '/api') {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  res.sendFile(path.join(clientDistPath, 'index.html'), (err) => {
+    if (err) {
+      res.status(404).json({ error: 'Not found' });
+    }
+  });
+});
 
 async function start(){
   try{
