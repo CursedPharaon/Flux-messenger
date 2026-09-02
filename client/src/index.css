@@ -1,0 +1,14 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+::-webkit-scrollbar { width:6px; height:6px; }
+::-webkit-scrollbar-thumb { background:#2a2a35; border-radius:9999px; }
+::-webkit-scrollbar-track { background:transparent; }
+
+.scrollbar-thin::-webkit-scrollbar { width:4px; }
+
+/* waveform animation */
+@keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:0.5 } }
+.animate-pulse-slow { animation: pulse 2s cubic-bezier(0.4,0,0.6,1) infinite; }
