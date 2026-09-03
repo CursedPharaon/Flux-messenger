@@ -1102,6 +1102,7 @@ async def ws_endpoint(ws: WebSocket, token: Optional[str]=Query(None)):
 # ─────────────────────────────────────────────────────────────
 # Static frontend
 # ─────────────────────────────────────────────────────────────
+ROOT_INDEX = Path("index.html")
 STATIC_DIR = Path("static")
 CLIENT_DIST = Path("client/dist")
 FRONTEND_DIR = None
@@ -1110,13 +1111,16 @@ for p in [CLIENT_DIST, STATIC_DIR, Path("frontend/dist")]:
         FRONTEND_DIR = p
         break
 
-if FRONTEND_DIR and FRONTEND_DIR.exists():
-    app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIR / "assets")) if (FRONTEND_DIR / "assets").exists() else StaticFiles(directory=str(FRONTEND_DIR)), name="assets")
+# mount assets if exists (support both legacy dirs and root)
+if FRONTEND_DIR and FRONTEND_DIR.exists() and (FRONTEND_DIR / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIR / "assets")), name="assets")
+elif Path("assets").exists():
+    app.mount("/assets", StaticFiles(directory="assets"), name="assets")
 
 @app.get("/", response_class=HTMLResponse)
 def serve_root():
-    # serve frontend
-    for cand in [CLIENT_DIST / "index.html", STATIC_DIR / "index.html", Path("frontend/dist/index.html")]:
+    # serve frontend — root index.html has priority
+    for cand in [Path("index.html"), CLIENT_DIST / "index.html", STATIC_DIR / "index.html", Path("frontend/dist/index.html")]:
         if cand.exists():
             return FileResponse(str(cand))
     # fallback inline
@@ -1126,7 +1130,7 @@ def serve_root():
 def serve_spa(full_path: str):
     if full_path.startswith("api/") or full_path.startswith("ws") or full_path.startswith("uploads/") or full_path.startswith("health"):
         raise HTTPException(404)
-    for cand in [CLIENT_DIST / "index.html", STATIC_DIR / "index.html"]:
+    for cand in [Path("index.html"), CLIENT_DIST / "index.html", STATIC_DIR / "index.html"]:
         if cand.exists():
             return FileResponse(str(cand))
     raise HTTPException(404)
