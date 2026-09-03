@@ -280,7 +280,13 @@ def seed():
 # Auth helpers
 # ─────────────────────────────────────────────────────────────
 def hash_pwd(p): return pwd_ctx.hash(p)
-def verify_pwd(p, h): return pwd_ctx.verify(p, h)
+def verify_pwd(p, h):
+    try:
+        return pwd_ctx.verify(p, h)
+    except Exception:
+        # Malformed hash (e.g. corrupted DB, truncated) -> treat as invalid password
+        # This prevents 500 with "The string did not match the expected pattern"
+        return False
 
 def create_access_token(user_id: str):
     exp = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_EXPIRE_MIN)
@@ -565,8 +571,15 @@ def verify(inp: VerifyIn):
 
 @app.post("/api/auth/login")
 def login(inp: LoginIn):
-    user = q_fetchone("SELECT * FROM users WHERE phone=?", (inp.phone,))
-    if not user or not verify_pwd(inp.password, user["password_hash"]):
+    # normalize phone: trim spaces
+    phone = (inp.phone or "").strip()
+    user = q_fetchone("SELECT * FROM users WHERE phone=?", (phone,))
+    # verify_pwd is now safe for malformed hashes
+    try:
+        pwd_ok = verify_pwd(inp.password, user["password_hash"]) if user else False
+    except Exception:
+        pwd_ok = False
+    if not user or not pwd_ok:
         raise HTTPException(401, "Invalid phone or password")
     access = create_access_token(user["id"])
     refresh = create_refresh_token(user["id"])
