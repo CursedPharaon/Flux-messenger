@@ -1,0 +1,493 @@
+<!doctype html>
+<html lang="ru" class="dark">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"/>
+<meta name="theme-color" content="#0a0a0f"/>
+<title>Flux Messenger ⚡</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config={darkMode:'class',theme:{extend:{colors:{flux:{bg:'#0a0a0f',card:'#14141e',border:'#262631',accent:'#7c3aed',accent2:'#06b6d4'}}}}}
+</script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+*{font-family:Inter,system-ui,sans-serif}
+::-webkit-scrollbar{width:5px;height:5px}::-webkit-scrollbar-thumb{background:#3a3a4a;border-radius:999px}
+*{scrollbar-width:thin;scrollbar-color:#3a3a4a transparent}
+@media(max-width:768px){button,a{min-height:44px}}
+</style>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-[#f8f7ff] dark:bg-[#0a0a0f] text-zinc-900 dark:text-white antialiased overflow-hidden select-none">
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef,useMemo} = React;
+
+const API = location.origin;
+const getToken=()=>localStorage.getItem('flux_access');
+const setToken=(t)=>localStorage.setItem('flux_access',t);
+const getRefresh=()=>localStorage.getItem('flux_refresh');
+const apiFetch=async(path,opts={})=>{
+  const headers={...(opts.headers||{})};
+  const token=getToken();
+  if(token) headers['Authorization']='Bearer '+token;
+  if(opts.body && !(opts.body instanceof FormData)) headers['Content-Type']='application/json';
+  let res=await fetch(API+path,{...opts,headers});
+  if(res.status===401 && getRefresh()){
+    // try refresh
+    try{
+      const r=await fetch(API+'/api/auth/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({refresh_token:getRefresh()})});
+      if(r.ok){const j=await r.json(); setToken(j.access_token); headers['Authorization']='Bearer '+j.access_token; res=await fetch(API+path,{...opts,headers});}
+    }catch(e){}
+  }
+  return res;
+};
+
+// Icons as inline SVG
+const Icon=({d,size=18,cls=""})=> <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={cls}><path d={d}/></svg>;
+
+function Toasts({toasts}){return <div className="fixed top-4 right-4 z-[100] space-y-2">{toasts.map(t=> <div key={t.id} className="px-4 py-3 rounded-xl bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 text-sm shadow-xl animate-[fadeIn_0.2s]">{t.msg}</div>)}</div>}
+
+function Auth({onAuth, toast}){
+  const [mode,setMode]=useState('login');
+  const [form,setForm]=useState({username:'',phone:'+7000000000',password:'',display_name:''});
+  const [loading,setLoading]=useState(false);
+  const submit=async(e)=>{
+    e.preventDefault(); setLoading(true);
+    try{
+      if(mode==='register'){
+        const r=await fetch(API+'/api/auth/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(form)});
+        const j=await r.json(); if(!r.ok) throw new Error(j.detail||'Ошибка');
+        setToken(j.access_token); localStorage.setItem('flux_refresh',j.refresh_token); localStorage.setItem('flux_user',JSON.stringify(j.user)); onAuth(j.user); toast('Добро пожаловать в Flux ⚡');
+      }else{
+        const r=await fetch(API+'/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:form.phone,password:form.password})});
+        const j=await r.json(); if(!r.ok) throw new Error(j.detail||'Ошибка');
+        setToken(j.access_token); localStorage.setItem('flux_refresh',j.refresh_token); localStorage.setItem('flux_user',JSON.stringify(j.user)); onAuth(j.user);
+      }
+    }catch(e){toast(e.message,'error')} finally{setLoading(false)}
+  };
+  return (
+    <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-violet-600 via-indigo-600 to-cyan-500">
+      <div className="w-full max-w-[420px] bg-white dark:bg-[#14141e] rounded-[24px] p-6 sm:p-8 shadow-2xl border border-white/20">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-600 to-cyan-400 flex items-center justify-center text-white font-bold text-xl">⚡</div>
+          <div><h1 className="font-bold text-xl dark:text-white">Flux Messenger</h1><p className="text-xs text-zinc-500">Быстрый • Защищённый • Красивый</p></div>
+        </div>
+        <div className="flex bg-zinc-100 dark:bg-zinc-800 rounded-full p-1 mb-6">
+          <button onClick={()=>setMode('login')} className={`flex-1 py-2 rounded-full text-sm font-medium transition ${mode==='login'?'bg-white dark:bg-zinc-700 shadow text-violet-600 dark:text-white':'text-zinc-500'}`}>Вход</button>
+          <button onClick={()=>setMode('register')} className={`flex-1 py-2 rounded-full text-sm font-medium transition ${mode==='register'?'bg-white dark:bg-zinc-700 shadow text-violet-600 dark:text-white':'text-zinc-500'}`}>Регистрация</button>
+        </div>
+        <form onSubmit={submit} className="space-y-3">
+          {mode==='register' && <>
+            <input placeholder="Username" value={form.username} onChange={e=>setForm({...form,username:e.target.value})} className="w-full px-4 py-3 rounded-xl bg-zinc-100 dark:bg-zinc-800 border-0 outline-none focus:ring-2 ring-violet-500 text-sm" required/>
+            <input placeholder="Имя" value={form.display_name} onChange={e=>setForm({...form,display_name:e.target.value})} className="w-full px-4 py-3 rounded-xl bg-zinc-100 dark:bg-zinc-800 border-0 outline-none text-sm"/>
+          </>}
+          <input placeholder="Телефон +7..." value={form.phone} onChange={e=>setForm({...form,phone:e.target.value})} className="w-full px-4 py-3 rounded-xl bg-zinc-100 dark:bg-zinc-800 border-0 outline-none text-sm" required/>
+          <input type="password" placeholder="Пароль" value={form.password} onChange={e=>setForm({...form,password:e.target.value})} className="w-full px-4 py-3 rounded-xl bg-zinc-100 dark:bg-zinc-800 border-0 outline-none text-sm" required/>
+          <button disabled={loading} className="w-full py-3 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 text-white font-semibold hover:opacity-90 transition disabled:opacity-50">{loading?'Загрузка...': mode==='register'?'Создать аккаунт →':'Войти'}</button>
+          <p className="text-center text-xs text-zinc-500">Демо: alice +70000000001 / alice123 · bob +70000000002 / bob12345<br/>Код верификации: 1234</p>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+// Messenger
+function Messenger({user,setUser,toast}){
+  const [chats,setChats]=useState([]);
+  const [selected,setSelected]=useState(null);
+  const [messages,setMessages]=useState([]);
+  const [text,setText]=useState('');
+  const [search,setSearch]=useState('');
+  const [q,setQ]=useState('');
+  const [typing,setTyping]=useState(null);
+  const [showInfo,setShowInfo]=useState(false);
+  const [showNew,setShowNew]=useState(false);
+  const [theme,setTheme]=useState(localStorage.getItem('flux_theme')||'dark');
+  const [replyTo,setReplyTo]=useState(null);
+  const [editing,setEditing]=useState(null);
+  const [searchMsg,setSearchMsg]=useState('');
+  const [recording,setRecording]=useState(false);
+  const wsRef=useRef(null);
+  const listRef=useRef(null);
+  const fileRef=useRef(null);
+  const mediaRecorderRef=useRef(null);
+
+  useEffect(()=>{document.documentElement.className=theme; localStorage.setItem('flux_theme',theme)},[theme]);
+
+  const loadChats=async()=>{
+    const r=await apiFetch('/api/chats'+(search?'?search='+encodeURIComponent(search):'')); if(r.ok) setChats(await r.json());
+  };
+  const loadMessages=async()=>{
+    if(!selected) return;
+    const r=await apiFetch(`/api/chats/${selected.id}/messages?limit=100`+(searchMsg?`&search=${encodeURIComponent(searchMsg)}`:'')); if(r.ok) setMessages(await r.json());
+    apiFetch(`/api/chats/${selected.id}/read`,{method:'POST'});
+  };
+  useEffect(()=>{loadChats()},[search]);
+  useEffect(()=>{loadMessages()},[selected,searchMsg]);
+  useEffect(()=>{ if(listRef.current) listRef.current.scrollTop=listRef.current.scrollHeight },[messages]);
+
+  // WS
+  useEffect(()=>{
+    const token=getToken(); if(!token) return;
+    const proto=location.protocol==='https:'?'wss:':'ws:';
+    const ws=new WebSocket(`${proto}//${location.host}/ws?token=${token}`);
+    wsRef.current=ws;
+    ws.onmessage=(e)=>{
+      const d=JSON.parse(e.data);
+      if(d.type==='message:new' && d.message.chat_id===selected?.id) setMessages(m=>[...m,d.message]);
+      else if(d.type==='message:new') { loadChats(); if(Notification.permission==='granted') new Notification('Flux: новое сообщение',{body:d.message.text}); }
+      if(d.type==='message:edit' && d.message.chat_id===selected?.id) setMessages(m=>m.map(x=>x.id===d.message.id?d.message:x));
+      if(d.type==='typing:start' && d.chat_id===selected?.id) {setTyping(d.display_name); setTimeout(()=>setTyping(null),2500)}
+      if(d.type==='typing:stop') setTyping(null);
+      if(d.type==='message:delete') setMessages(m=>m.filter(x=>x.id!==d.message_id));
+      if(d.type==='call:incoming') toast(`Входящий звонок от ${d.from?.display_name||d.from}`);
+    };
+    ws.onopen=()=> ws.send(JSON.stringify({type:'ping'}));
+    return()=>ws.close();
+  },[selected]);
+
+  // notify permission
+  useEffect(()=>{ if('Notification' in window && Notification.permission==='default') Notification.requestPermission(); },[]);
+
+  const send=async()=>{
+    if(!text.trim() || !selected) return;
+    if(editing){
+      const r=await apiFetch(`/api/messages/${editing.id}`,{method:'PUT',body:JSON.stringify({text})});
+      if(r.ok){ const j=await r.json(); setMessages(m=>m.map(x=>x.id===j.id?j:x)); setEditing(null); setText('');}
+      return;
+    }
+    const payload={chat_id:selected.id,text,reply_to_message_id:replyTo?.id||null};
+    const r=await apiFetch('/api/messages',{method:'POST',body:JSON.stringify(payload)});
+    if(r.ok){ const j=await r.json(); setMessages(m=>[...m,j]); setText(''); setReplyTo(null); loadChats();}
+    wsRef.current?.send(JSON.stringify({type:'typing:stop',chat_id:selected.id}));
+  };
+  const handleTyping=(v)=>{
+    setText(v);
+    if(wsRef.current && selected) wsRef.current.send(JSON.stringify({type:'typing:start',chat_id:selected.id}));
+  };
+  const doReact=async(mid,emoji)=>{
+    await apiFetch(`/api/messages/${mid}/reactions`,{method:'POST',body:JSON.stringify({emoji})});
+    loadMessages();
+  };
+  const delMsg=async(mid,forAll)=>{
+    await apiFetch(`/api/messages/${mid}?for_all=${forAll}`,{method:'DELETE'}); loadMessages(); loadChats();
+  };
+  const onFile=async(e)=>{
+    const f=e.target.files[0]; if(!f||!selected) return;
+    if(f.size>50*1024*1024) return toast('Файл >50MB');
+    const fd=new FormData(); fd.append('file',f);
+    const r=await apiFetch('/api/upload',{method:'POST',body:fd});
+    if(r.ok){ const j=await r.json(); await apiFetch('/api/messages',{method:'POST',body:JSON.stringify({chat_id:selected.id, text: text||f.name, media_type:j.media_type, media_url:j.url, media_size:j.size})}); loadMessages(); setText('');}
+  };
+  const startVoice=async()=>{
+    try{
+      const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+      const rec=new MediaRecorder(stream); mediaRecorderRef.current=rec; const chunks=[];
+      rec.ondataavailable=e=>chunks.push(e.data);
+      rec.onstop=async()=>{
+        const blob=new Blob(chunks,{type:'audio/webm'}); const fd=new FormData(); fd.append('file',blob,'voice.webm');
+        const r=await apiFetch('/api/upload',{method:'POST',body:fd});
+        if(r.ok){ const j=await r.json(); await apiFetch('/api/messages',{method:'POST',body:JSON.stringify({chat_id:selected.id, text:'🎤 Голосовое сообщение', media_type:'voice', media_url:j.url, media_size:j.size})}); loadMessages();}
+        stream.getTracks().forEach(t=>t.stop());
+      };
+      rec.start(); setRecording(true); toast('Запись... нажми ещё раз для стоп');
+    }catch{ toast('Нет доступа к микрофону')}
+  };
+  const stopVoice=()=>{ mediaRecorderRef.current?.stop(); setRecording(false); };
+
+  const filteredChats=useMemo(()=> chats.filter(c=> !q || c.title?.toLowerCase().includes(q.toLowerCase())),[chats,q]);
+
+  const logout=async()=>{ await apiFetch('/api/auth/logout',{method:'POST'}); localStorage.clear(); location.reload(); };
+
+  const createChat=async(data)=>{
+    const r=await apiFetch('/api/chats',{method:'POST',body:JSON.stringify(data)});
+    if(r.ok){ const j=await r.json(); setChats(c=>[j,...c]); setSelected(j); setShowNew(false); toast('Чат создан');} else { const e=await r.json(); toast(e.detail||'Ошибка');}
+  };
+
+  return (
+    <div className="h-[100dvh] flex flex-col bg-[#f8f7ff] dark:bg-[#0a0a0f]">
+      {/* header mobile */}
+      <div className="lg:hidden flex items-center justify-between px-4 py-3 bg-white/80 dark:bg-[#14141e]/80 backdrop-blur border-b border-zinc-200 dark:border-zinc-800">
+        <div className="flex items-center gap-2"><div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-600 to-cyan-400 flex items-center justify-center text-white font-bold">⚡</div><span className="font-bold dark:text-white">Flux</span></div>
+        <div className="flex items-center gap-2">
+          <button onClick={()=>setTheme(theme==='dark'?'light':'dark')} className="w-9 h-9 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center">{theme==='dark'?'☀️':'🌙'}</button>
+          <img src={user.avatar_url||`https://api.dicebear.com/7.x/initials/svg?seed=${user.display_name}`} className="w-8 h-8 rounded-full object-cover"/>
+        </div>
+      </div>
+
+      <div className="flex-1 flex overflow-hidden">
+        {/* Sidebar — chats */}
+        <div className={`${selected?'hidden lg:flex':'flex'} w-full lg:w-[360px] shrink-0 flex-col bg-white dark:bg-[#0f0f18] border-r border-zinc-200 dark:border-zinc-800`}>
+          <div className="hidden lg:flex items-center justify-between p-4">
+            <div className="flex items-center gap-3"><div className="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-600 to-cyan-400 flex items-center justify-center text-white font-bold">⚡</div><span className="font-bold text-lg dark:text-white">Flux</span><span className="text-xs bg-violet-100 dark:bg-violet-900/30 text-violet-600 px-2 py-1 rounded-full">beta</span></div>
+            <button onClick={()=>setTheme(theme==='dark'?'light':'dark')} className="w-8 h-8 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center text-sm">{theme==='dark'?'☀️':'🌙'}</button>
+          </div>
+          <div className="p-3 space-y-3">
+            <div className="relative"><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Поиск чатов..." className="w-full pl-9 pr-4 py-2.5 rounded-full bg-zinc-100 dark:bg-zinc-800 outline-none text-sm dark:text-white placeholder-zinc-400"/><span className="absolute left-3 top-2.5 text-zinc-400">🔍</span></div>
+            <div className="flex gap-2 overflow-x-auto scrollbar-none pb-1">
+              <button onClick={()=>setShowNew(true)} className="shrink-0 px-3 py-1.5 rounded-full bg-violet-600 text-white text-xs font-medium">+ Новый чат</button>
+              <button className="shrink-0 px-3 py-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-xs dark:text-white">Все</button>
+              <button className="shrink-0 px-3 py-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-xs dark:text-white">Личные</button>
+              <button className="shrink-0 px-3 py-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-xs dark:text-white">Группы</button>
+            </div>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            {filteredChats.length===0 && <div className="p-8 text-center text-sm text-zinc-500">Нет чатов<br/><button onClick={()=>setShowNew(true)} className="text-violet-600 mt-2">Создать первый чат →</button></div>}
+            {filteredChats.map(c=>(
+              <div key={c.id} onClick={()=>setSelected(c)} onContextMenu={e=>{e.preventDefault(); if(confirm('Закрепить / удалить?')){}}}
+                   className={`flex gap-3 px-3 py-3 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50 border-b border-zinc-100 dark:border-zinc-800/50 ${selected?.id===c.id?'bg-violet-50 dark:bg-violet-950/30':''}`}>
+                <div className="relative shrink-0"><img src={c.avatar_url||`https://api.dicebear.com/7.x/initials/svg?seed=${c.title}`} className="w-12 h-12 rounded-full object-cover"/><span className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-white dark:border-[#0f0f18] ${c.participants?.some(p=>p.is_online)?'bg-emerald-500':'bg-zinc-300'}`}></span></div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex justify-between items-start"><span className="font-medium text-sm dark:text-white truncate">{c.title}</span><span className="text-[11px] text-zinc-400 shrink-0 ml-2">{c.last_message? new Date(c.last_message.created_at).toLocaleTimeString().slice(0,5):''}</span></div>
+                  <div className="flex justify-between items-center"><span className="text-xs text-zinc-500 truncate pr-2">{c.last_message? (c.last_message.text?.slice(0,30)||'📎 Медиа') : 'Нет сообщений'}</span>{c.unread_count>0 && <span className="bg-violet-600 text-white text-[11px] px-1.5 py-0.5 rounded-full min-w-[18px] text-center">{c.unread_count}</span>}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="p-3 border-t border-zinc-200 dark:border-zinc-800 flex items-center gap-3 bg-white dark:bg-[#0f0f18]">
+            <img src={user.avatar_url||`https://api.dicebear.com/7.x/initials/svg?seed=${user.display_name}`} className="w-9 h-9 rounded-full"/>
+            <div className="flex-1 min-w-0"><div className="text-sm font-medium dark:text-white truncate">{user.display_name}</div><div className="text-xs text-emerald-500">● в сети</div></div>
+            <button onClick={logout} className="text-xs px-3 py-2 rounded-full bg-zinc-100 dark:bg-zinc-800 dark:text-white">Выйти</button>
+          </div>
+        </div>
+
+        {/* Center — chat */}
+        <div className={`${!selected?'hidden lg:flex':''} flex-1 flex flex-col min-w-0 bg-[#f0eefc] dark:bg-[#08080c]`}>
+          {!selected ? (
+            <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
+              <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-violet-600 to-cyan-400 flex items-center justify-center text-3xl mb-4">⚡</div>
+              <h2 className="text-xl font-bold dark:text-white">Flux Messenger</h2>
+              <p className="text-sm text-zinc-500 max-w-sm mt-2">Выбери чат слева или создай новый. Отправляй текст, файлы, голосовые, ставь реакции — всё в реальном времени через WebSockets.</p>
+              <button onClick={()=>setShowNew(true)} className="mt-6 px-6 py-3 rounded-full bg-violet-600 text-white font-medium">Создать чат</button>
+            </div>
+          ): (
+            <>
+              {/* chat header */}
+              <div className="h-[60px] shrink-0 flex items-center gap-3 px-3 sm:px-4 bg-white dark:bg-[#14141e] border-b border-zinc-200 dark:border-zinc-800">
+                <button onClick={()=>setSelected(null)} className="lg:hidden w-9 h-9 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center">←</button>
+                <img src={selected.avatar_url||`https://api.dicebear.com/7.x/initials/svg?seed=${selected.title}`} className="w-9 h-9 rounded-full"/>
+                <div className="flex-1 min-w-0" onClick={()=>setShowInfo(v=>!v)}>
+                  <div className="font-medium text-sm dark:text-white truncate">{selected.title} {selected.type!=='private' && <span className="text-xs text-zinc-400">• {selected.participants?.length} участников</span>}</div>
+                  <div className="text-xs text-emerald-500 truncate">{typing? `${typing} печатает...`: selected.participants?.some(p=>p.is_online)? 'в сети' : 'был(а) недавно'}</div>
+                </div>
+                <div className="flex items-center gap-1">
+                  <button onClick={async()=>{ const r=await apiFetch('/api/calls',{method:'POST',body:JSON.stringify({chat_id:selected.id, callee_id:selected.participants.find(p=>p.id!==user.id)?.id, type:'audio'})}); toast('Звонок (заглушка) — лог сохранён'); }} className="w-9 h-9 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center text-sm">📞</button>
+                  <button onClick={()=>setShowInfo(v=>!v)} className="w-9 h-9 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center">⋯</button>
+                </div>
+              </div>
+
+              {/* search in chat */}
+              {searchMsg!==null && (
+                <div className="px-3 py-2 bg-white dark:bg-[#14141e] border-b border-zinc-200 dark:border-zinc-800 flex gap-2">
+                  <input value={searchMsg} onChange={e=>setSearchMsg(e.target.value)} placeholder="Поиск по сообщениям..." className="flex-1 px-3 py-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-sm outline-none dark:text-white"/>
+                  <button onClick={()=>setSearchMsg('')} className="text-xs px-3 py-1 rounded-full bg-zinc-100 dark:bg-zinc-800 dark:text-white">✕</button>
+                </div>
+              )}
+
+              {/* messages */}
+              <div ref={listRef} className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3">
+                {messages.map(m=>(
+                  <div key={m.id} className={`flex ${m.sender_id===user.id?'justify-end':'justify-start'}`}>
+                    <div className={`max-w-[78%] sm:max-w-[60%] rounded-[18px] px-3 py-2 relative group ${m.sender_id===user.id?'bg-gradient-to-br from-violet-600 to-indigo-600 text-white rounded-br-[4px]':'bg-white dark:bg-[#1e1e2e] dark:text-white rounded-bl-[4px] shadow-sm'} ${m.is_pinned?'ring-2 ring-amber-400':''}`}>
+                      {m.reply_to && <div className={`mb-1 pl-2 border-l-2 text-xs opacity-80 ${m.sender_id===user.id?'border-white/50':'border-violet-500'}`}>{m.reply_to.sender_name}: {m.reply_to.text?.slice(0,60)}</div>}
+                      {m.media_type!=='none' && m.media_url && (
+                        <div className="mb-2">
+                          {m.media_type==='image' && <img src={m.media_url} className="rounded-xl max-w-full cursor-pointer" onClick={()=>window.open(m.media_url,'_blank')}/>}
+                          {m.media_type==='video' && <video src={m.media_url} controls className="rounded-xl max-w-full"/>}
+                          {m.media_type==='voice' || m.media_type==='audio' ? <audio src={m.media_url} controls className="w-full h-8"/> : null}
+                          {m.media_type==='file' && <a href={m.media_url} target="_blank" className="text-xs underline">📎 {m.media_url.split('/').pop()}</a>}
+                        </div>
+                      )}
+                      <div className="text-[14px] leading-[1.35] break-words whitespace-pre-wrap">{m.is_deleted?'🚫 Удалено': m.text}</div>
+                      {Object.keys(m.reactions_grouped||{}).length>0 && <div className="flex gap-1 mt-1 flex-wrap">{Object.entries(m.reactions_grouped).map(([e,c])=> <span key={e} className="text-xs bg-black/10 dark:bg-white/10 px-1.5 py-0.5 rounded-full">{e} {c}</span>)}</div>}
+                      <div className={`flex items-center gap-1 mt-1 text-[11px] ${m.sender_id===user.id?'text-white/70':'text-zinc-400'}`}>
+                        <span>{new Date(m.created_at).toLocaleTimeString().slice(0,5)}</span>
+                        {m.is_edited && <span>· изменено</span>}
+                        {m.is_pinned && <span>· 📌</span>}
+                        {m.sender_id===user.id && <span>{m.statuses?.some(s=>s.status==='read')?'✓✓': m.statuses?.length?'✓✓':'✓'}</span>}
+                      </div>
+                      {/* actions */}
+                      <div className="hidden group-hover:flex absolute -top-6 right-2 bg-white dark:bg-zinc-800 rounded-full shadow-lg border border-zinc-200 dark:border-zinc-700 p-1 gap-0.5 text-xs">
+                        {['👍','❤️','🔥','😂','😱'].map(em=> <button key={em} onClick={()=>doReact(m.id,em)} className="w-6 h-6 hover:bg-zinc-100 dark:hover:bg-zinc-700 rounded-full">{em}</button>)}
+                        <button onClick={()=>setReplyTo(m)} className="px-1">↩️</button>
+                        {m.sender_id===user.id && <button onClick={()=>{setEditing(m); setText(m.text)}} className="px-1">✏️</button>}
+                        <button onClick={()=>navigator.clipboard.writeText(m.text||'')} className="px-1">📋</button>
+                        <button onClick={()=>delMsg(m.id, false)} className="px-1">🗑️</button>
+                        {m.sender_id===user.id && <button onClick={()=>delMsg(m.id,true)} className="px-1 text-red-500">💥</button>}
+                        <button onClick={async()=>{await apiFetch(`/api/messages/${m.id}/pin`,{method:'POST'}); loadMessages()}} className="px-1">📌</button>
+                        <button onClick={async()=>{const cid=prompt('Forward to chatId?'); if(cid) await apiFetch(`/api/messages/${m.id}/forward`,{method:'POST',body:JSON.stringify({chat_id:cid})})}} className="px-1">↗️</button>
+                      </div>
+                      {/* long-press on mobile */}
+                      <div className="lg:hidden mt-2 flex gap-1 flex-wrap">
+                        <button onClick={()=>setReplyTo(m)} className="text-[11px] px-2 py-1 rounded-full bg-black/10">Ответить</button>
+                        <button onClick={()=>doReact(m.id,'❤️')} className="text-[11px] px-2 py-1 rounded-full bg-black/10">❤️</button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {typing && <div className="text-xs text-zinc-500 px-2">●●● {typing} печатает...</div>}
+              </div>
+
+              {/* reply/edit bar */}
+              {(replyTo || editing) && (
+                <div className="px-4 py-2 bg-amber-50 dark:bg-amber-950/30 border-t border-amber-200 dark:border-amber-900 flex justify-between items-center text-xs">
+                  <span className="truncate">{editing? `✏️ Редактирование: ${editing.text?.slice(0,40)}` : `↩️ Ответ: ${replyTo.text?.slice(0,40)}`}</span>
+                  <button onClick={()=>{setReplyTo(null); setEditing(null); setText('')}} className="ml-2 px-2 py-1 rounded-full bg-zinc-200 dark:bg-zinc-700">✕</button>
+                </div>
+              )}
+
+              {/* input */}
+              <div className="shrink-0 p-2 sm:p-3 bg-white dark:bg-[#14141e] border-t border-zinc-200 dark:border-zinc-800">
+                <div className="flex items-end gap-2 max-w-4xl mx-auto">
+                  <button onClick={()=>fileRef.current.click()} className="w-10 h-10 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center shrink-0">📎</button>
+                  <input ref={fileRef} type="file" className="hidden" onChange={onFile}/>
+                  <div className="flex-1 relative">
+                    <textarea value={text} onChange={e=>handleTyping(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault(); send()}}} placeholder="Сообщение..." rows={1} className="w-full px-4 py-3 pr-10 rounded-[20px] bg-zinc-100 dark:bg-zinc-800 outline-none resize-none max-h-[120px] text-sm dark:text-white placeholder-zinc-400"/>
+                    <button onClick={()=>setText(t=>t+' 😊')} className="absolute right-2 top-2 w-7 h-7 flex items-center justify-center">😊</button>
+                  </div>
+                  <button onMouseDown={startVoice} onMouseUp={stopVoice} onTouchStart={startVoice} onTouchEnd={stopVoice} className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${recording?'bg-red-500 text-white':'bg-zinc-100 dark:bg-zinc-800'}`}>🎤</button>
+                  <button onClick={send} className="w-10 h-10 rounded-full bg-violet-600 text-white flex items-center justify-center shrink-0 hover:bg-violet-700">➤</button>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Right — profile/info (desktop) */}
+        <div className={`${showInfo?'flex':'hidden xl:flex'} w-[280px] shrink-0 flex-col bg-white dark:bg-[#0f0f18] border-l border-zinc-200 dark:border-zinc-800 ${selected?'':'hidden'}`}>
+          <div className="p-4">
+            <div className="flex justify-between items-center mb-4"><h3 className="font-semibold dark:text-white">Информация</h3><button onClick={()=>setShowInfo(false)} className="xl:hidden w-8 h-8 rounded-full bg-zinc-100 dark:bg-zinc-800">✕</button></div>
+            {selected ? (
+              <>
+                <div className="flex flex-col items-center text-center">
+                  <img src={selected.avatar_url||`https://api.dicebear.com/7.x/initials/svg?seed=${selected.title}`} className="w-20 h-20 rounded-full"/>
+                  <div className="font-semibold mt-2 dark:text-white">{selected.title}</div>
+                  <div className="text-xs text-zinc-500">{selected.type} • {selected.participants?.length} участников</div>
+                  <div className="text-xs mt-1 bg-zinc-100 dark:bg-zinc-800 px-2 py-1 rounded-full dark:text-white">Приглашение: {selected.invite_link}</div>
+                </div>
+                <div className="mt-6 space-y-2">
+                  <button onClick={()=>setSearchMsg(s=>s===''? '': '')} className="w-full text-left px-3 py-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-sm dark:text-white">🔍 Поиск по сообщениям</button>
+                  <button onClick={async()=>{ const r=await apiFetch(`/api/chats/${selected.id}/export?format=json`); const j=await r.json(); const blob=new Blob([JSON.stringify(j,null,2)],{type:'application/json'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=`chat-${selected.id}.json`; a.click();}} className="w-full text-left px-3 py-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-sm dark:text-white">⬇️ Экспорт чата (JSON)</button>
+                  <button onClick={async()=>{ if(confirm('Покинуть чат?')){ await apiFetch(`/api/chats/${selected.id}/leave`,{method:'POST'}); setSelected(null); loadChats(); }}} className="w-full text-left px-3 py-2 rounded-xl bg-red-50 dark:bg-red-950/30 text-sm text-red-600">🚪 Выйти из чата</button>
+                </div>
+                <div className="mt-6">
+                  <h4 className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-2">Участники</h4>
+                  <div className="space-y-2 max-h-[40vh] overflow-y-auto">
+                    {selected.participants?.map(p=>(
+                      <div key={p.id} className="flex items-center gap-2">
+                        <img src={p.avatar_url||`https://api.dicebear.com/7.x/initials/svg?seed=${p.display_name}`} className="w-8 h-8 rounded-full"/>
+                        <div className="flex-1 min-w-0"><div className="text-sm dark:text-white truncate">{p.display_name} {p.role==='creator'&&'👑'}</div><div className="text-xs text-zinc-500">@{p.username}</div></div>
+                        <span className={`w-2 h-2 rounded-full ${p.is_online?'bg-emerald-500':'bg-zinc-300'}`}></span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            ): (
+              <Profile user={user} setUser={setUser} toast={toast}/>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* mobile bottom nav */}
+      <div className="lg:hidden h-[56px] shrink-0 flex items-center justify-around bg-white dark:bg-[#14141e] border-t border-zinc-200 dark:border-zinc-800">
+        <button className="flex flex-col items-center text-violet-600"><span>💬</span><span className="text-[10px]">Чаты</span></button>
+        <button onClick={()=>setShowNew(true)} className="flex flex-col items-center text-zinc-400"><span>➕</span><span className="text-[10px]">Новый</span></button>
+        <button onClick={()=>setShowInfo(v=>!v)} className="flex flex-col items-center text-zinc-400"><span>👤</span><span className="text-[10px]">Профиль</span></button>
+      </div>
+
+      {/* New chat modal */}
+      {showNew && <NewChat onClose={()=>setShowNew(false)} onCreate={createChat} toast={toast}/>}
+    </div>
+  )
+}
+
+function NewChat({onClose,onCreate}){
+  const [tab,setTab]=useState('private');
+  const [q,setQ]=useState('');
+  const [users,setUsers]=useState([]);
+  const [sel,setSel]=useState([]);
+  const [title,setTitle]=useState('');
+  useEffect(()=>{
+    if(!q) {setUsers([]); return;}
+    const t=setTimeout(async()=>{ const r=await apiFetch('/api/users/search?q='+encodeURIComponent(q)); if(r.ok) setUsers(await r.json());},300);
+    return()=>clearTimeout(t);
+  },[q]);
+  const toggle=(u)=> setSel(s=> s.find(x=>x.id===u.id)? s.filter(x=>x.id!==u.id): [...s,u]);
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} className="w-full sm:max-w-md bg-white dark:bg-[#14141e] rounded-t-[20px] sm:rounded-[20px] p-5 max-h-[85vh] overflow-y-auto">
+        <div className="flex justify-between items-center mb-4"><h3 className="font-bold dark:text-white">Новый чат</h3><button onClick={onClose} className="w-8 h-8 rounded-full bg-zinc-100 dark:bg-zinc-800">✕</button></div>
+        <div className="flex gap-2 mb-4">
+          <button onClick={()=>setTab('private')} className={`flex-1 py-2 rounded-full text-sm ${tab==='private'?'bg-violet-600 text-white':'bg-zinc-100 dark:bg-zinc-800 dark:text-white'}`}>Личный</button>
+          <button onClick={()=>setTab('group')} className={`flex-1 py-2 rounded-full text-sm ${tab==='group'?'bg-violet-600 text-white':'bg-zinc-100 dark:bg-zinc-800 dark:text-white'}`}>Группа</button>
+          <button onClick={()=>setTab('channel')} className={`flex-1 py-2 rounded-full text-sm ${tab==='channel'?'bg-violet-600 text-white':'bg-zinc-100 dark:bg-zinc-800 dark:text-white'}`}>Канал</button>
+        </div>
+        {tab!=='private' && <input value={title} onChange={e=>setTitle(e.target.value)} placeholder="Название группы/канала" className="w-full px-4 py-2.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 outline-none text-sm mb-3 dark:text-white"/>}
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Поиск по username / телефону" className="w-full px-4 py-2.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 outline-none text-sm dark:text-white"/>
+        <div className="mt-3 space-y-2 max-h-[40vh] overflow-y-auto">
+          {users.map(u=>(
+            <div key={u.id} onClick={()=>toggle(u)} className={`flex items-center gap-3 p-2 rounded-xl cursor-pointer ${sel.find(s=>s.id===u.id)?'bg-violet-50 dark:bg-violet-950/30 border border-violet-200':''}`}>
+              <img src={u.avatar_url||`https://api.dicebear.com/7.x/initials/svg?seed=${u.display_name}`} className="w-9 h-9 rounded-full"/>
+              <div className="flex-1"><div className="text-sm font-medium dark:text-white">{u.display_name}</div><div className="text-xs text-zinc-500">@{u.username} • {u.phone}</div></div>
+              {sel.find(s=>s.id===u.id) && <span className="text-violet-600">✓</span>}
+            </div>
+          ))}
+        </div>
+        {sel.length>0 && <div className="mt-3 flex flex-wrap gap-1">{sel.map(s=> <span key={s.id} className="text-xs bg-violet-100 dark:bg-violet-900/30 px-2 py-1 rounded-full">{s.username} <button onClick={()=>toggle(s)}>×</button></span>)}</div>}
+        <button onClick={()=>{
+          if(tab==='private'){ if(sel[0]) onCreate({type:'private', member_ids:[sel[0].id]}); else if(q) onCreate({type:'private', username:q});}
+          else onCreate({type:tab, title, member_ids: sel.map(s=>s.id)});
+        }} className="w-full mt-4 py-3 rounded-xl bg-violet-600 text-white font-medium">Создать</button>
+      </div>
+    </div>
+  )
+}
+
+function Profile({user,setUser,toast}){
+  const [form,setForm]=useState({display_name:user.display_name, username:user.username, bio:user.bio||'', avatar_url:user.avatar_url||''});
+  const save=async()=>{
+    const r=await apiFetch('/api/users/me',{method:'PUT',body:JSON.stringify(form)});
+    if(r.ok){ const j=await r.json(); setUser(j); localStorage.setItem('flux_user',JSON.stringify(j)); toast('Профиль обновлён');}
+  };
+  const uploadAvatar=async(e)=>{
+    const f=e.target.files[0]; if(!f) return;
+    const fd=new FormData(); fd.append('file',f);
+    const r=await apiFetch('/api/upload',{method:'POST',body:fd});
+    if(r.ok){ const j=await r.json(); setForm({...form, avatar_url: j.url}); toast('Аватар загружен');}
+  };
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-col items-center">
+        <img src={form.avatar_url||`https://api.dicebear.com/7.x/initials/svg?seed=${form.display_name}`} className="w-20 h-20 rounded-full object-cover"/>
+        <label className="mt-2 text-xs px-3 py-1 rounded-full bg-zinc-100 dark:bg-zinc-800 cursor-pointer dark:text-white">Загрузить аватар<input type="file" className="hidden" onChange={uploadAvatar}/></label>
+      </div>
+      <input value={form.display_name} onChange={e=>setForm({...form,display_name:e.target.value})} placeholder="Имя" className="w-full px-3 py-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-sm dark:text-white outline-none"/>
+      <input value={form.username} onChange={e=>setForm({...form,username:e.target.value})} placeholder="username" className="w-full px-3 py-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-sm dark:text-white outline-none"/>
+      <textarea value={form.bio} onChange={e=>setForm({...form,bio:e.target.value})} placeholder="Био" rows={2} className="w-full px-3 py-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-sm dark:text-white outline-none"/>
+      <button onClick={save} className="w-full py-2 rounded-xl bg-violet-600 text-white text-sm font-medium">Сохранить</button>
+      <div className="text-xs text-zinc-500 text-center">Телефон: {user.phone}<br/>Был(а) в сети: {new Date(user.last_seen).toLocaleString()}</div>
+      <button onClick={async()=>{ if(confirm('Удалить аккаунт?')){ await apiFetch('/api/users/me',{method:'DELETE'}); localStorage.clear(); location.reload();}}} className="w-full py-2 rounded-xl bg-red-50 dark:bg-red-950/30 text-red-600 text-sm">Удалить аккаунт</button>
+    </div>
+  )
+}
+
+function App(){
+  const [user,setUser]=useState(()=>{ try{return JSON.parse(localStorage.getItem('flux_user')||'null')}catch{return null}});
+  const [toasts,setToasts]=useState([]);
+  const toast=(msg)=>{ const id=Date.now(); setToasts(t=>[...t,{id,msg}]); setTimeout(()=>setToasts(t=>t.filter(x=>x.id!==id)),2500)};
+  useEffect(()=>{
+    if(!user || !getToken()) return;
+    apiFetch('/api/auth/me').then(async r=>{ if(r.ok) {const j=await r.json(); setUser(j)} else {localStorage.clear(); setUser(null)}});
+  },[]);
+  if(!user) return <><Auth onAuth={setUser} toast={toast}/><Toasts toasts={toasts}/></>;
+  return <><Messenger user={user} setUser={setUser} toast={toast}/><Toasts toasts={toasts}/></>;
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
