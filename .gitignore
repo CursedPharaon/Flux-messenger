@@ -4,6 +4,10 @@ server/dist/
 client/dist/
 server/uploads/*
 !server/uploads/.gitkeep
+uploads/*
+!uploads/.gitkeep
+flux.db
 .env
+__pycache__/
 .DS_Store
 *.log
