@@ -26,20 +26,82 @@ tailwind.config={darkMode:'class',theme:{extend:{colors:{flux:{bg:'#0a0a0f',card
 const {useState,useEffect,useRef,useMemo} = React;
 
 const API = location.origin;
-const getToken=()=>localStorage.getItem('flux_access');
-const setToken=(t)=>localStorage.setItem('flux_access',t);
-const getRefresh=()=>localStorage.getItem('flux_refresh');
+// helper to clean tokens that may have been stored with JSON.stringify or with quotes
+const cleanToken=(t)=>{
+  if(!t || t==='null' || t==='undefined') return null;
+  t=String(t).trim();
+  if(t.startsWith('Bearer ')) t=t.slice(7).trim();
+  // strip surrounding quotes if double-JSON-encoded
+  if((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))){
+    try{ t=JSON.parse(t); }catch{ t=t.slice(1,-1); }
+    t=(t||'').trim();
+  }
+  // if it's a JSON stringified object like '{"access_token":...}' try extract
+  if(t.startsWith('{')){
+    try{ const o=JSON.parse(t); if(o.access_token) t=o.access_token; else if(o.token) t=o.token; }catch{}
+    t=String(t).trim();
+    if(t.startsWith('Bearer ')) t=t.slice(7).trim();
+  }
+  // remove any whitespace/newlines that would break Fetch header validation (the "pattern" DOMException)
+  if(/[\r\n]/.test(t)) t=t.replace(/[\r\n]+/g,'').trim();
+  if(!t || t==='null' || t==='undefined') return null;
+  // basic sanity: JWT has 2 dots
+  if(t.includes('"') || t.includes("'") || t.includes(' ')) {
+    // if still contains illegal header chars, consider token corrupted
+    // keep as-is but will be handled by apiFetch try/catch
+  }
+  return t;
+};
+const getToken=()=>{
+  try{ return cleanToken(localStorage.getItem('flux_access')); }catch{ return null; }
+};
+const setToken=(t)=>{
+  try{
+    if(!t) localStorage.removeItem('flux_access');
+    else localStorage.setItem('flux_access', String(t).trim());
+  }catch(e){ console.warn('setToken failed', e); }
+};
+const getRefresh=()=>{
+  try{ return cleanToken(localStorage.getItem('flux_refresh')); }catch{ return null; }
+};
+// safe JSON parse for stored user
+const getStoredUser=()=>{
+  try{
+    const v=localStorage.getItem('flux_user');
+    if(!v || v==='null' || v==='undefined') return null;
+    return JSON.parse(v);
+  }catch{ return null; }
+};
 const apiFetch=async(path,opts={})=>{
   const headers={...(opts.headers||{})};
   const token=getToken();
   if(token) headers['Authorization']='Bearer '+token;
   if(opts.body && !(opts.body instanceof FormData)) headers['Content-Type']='application/json';
-  let res=await fetch(API+path,{...opts,headers});
+  let res;
+  try{
+    res=await fetch(API+path,{...opts,headers});
+  }catch(e){
+    // Fetch can throw DOMException "The string did not match the expected pattern"
+    // when headers contain invalid characters (e.g. corrupted token with quotes/newlines)
+    if(e && e.message && e.message.includes('pattern')){
+      console.error('apiFetch header pattern error, clearing corrupted storage', e);
+      try{ localStorage.removeItem('flux_access'); localStorage.removeItem('flux_refresh'); }catch{}
+      throw new Error('Сессия повреждена (некорректный токен). Очистите localStorage и войдите заново.');
+    }
+    throw e;
+  }
   if(res.status===401 && getRefresh()){
     // try refresh
     try{
-      const r=await fetch(API+'/api/auth/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({refresh_token:getRefresh()})});
-      if(r.ok){const j=await r.json(); setToken(j.access_token); headers['Authorization']='Bearer '+j.access_token; res=await fetch(API+path,{...opts,headers});}
+      const rt=getRefresh();
+      if(rt){
+        const r=await fetch(API+'/api/auth/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({refresh_token:rt})});
+        if(r.ok){const j=await r.json(); setToken(j.access_token); headers['Authorization']='Bearer '+j.access_token; res=await fetch(API+path,{...opts,headers});}
+        else if(r.status===401){
+          // refresh invalid -> clear and force relogin
+          try{ localStorage.removeItem('flux_access'); localStorage.removeItem('flux_refresh'); }catch{}
+        }
+      }
     }catch(e){}
   }
   return res;
@@ -57,16 +119,28 @@ function Auth({onAuth, toast}){
   const submit=async(e)=>{
     e.preventDefault(); setLoading(true);
     try{
+      // clear possible corrupted storage before auth
+      try{
+        const ct=getToken(); if(ct && /["'\n\r]/.test(ct)) localStorage.removeItem('flux_access');
+      }catch{}
       if(mode==='register'){
         const r=await fetch(API+'/api/auth/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(form)});
         const j=await r.json(); if(!r.ok) throw new Error(j.detail||'Ошибка');
-        setToken(j.access_token); localStorage.setItem('flux_refresh',j.refresh_token); localStorage.setItem('flux_user',JSON.stringify(j.user)); onAuth(j.user); toast('Добро пожаловать в Flux ⚡');
+        setToken(j.access_token); try{ localStorage.setItem('flux_refresh', String(j.refresh_token).trim()); }catch{}; try{ localStorage.setItem('flux_user',JSON.stringify(j.user)); }catch{}; onAuth(j.user); toast('Добро пожаловать в Flux ⚡');
       }else{
         const r=await fetch(API+'/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:form.phone,password:form.password})});
-        const j=await r.json(); if(!r.ok) throw new Error(j.detail||'Ошибка');
-        setToken(j.access_token); localStorage.setItem('flux_refresh',j.refresh_token); localStorage.setItem('flux_user',JSON.stringify(j.user)); onAuth(j.user);
+        let j; try{ j=await r.json(); }catch{ throw new Error('Ошибка сервера'); }
+        if(!r.ok) throw new Error(j.detail||'Ошибка');
+        setToken(j.access_token); try{ localStorage.setItem('flux_refresh', String(j.refresh_token).trim()); }catch{}; try{ localStorage.setItem('flux_user',JSON.stringify(j.user)); }catch{}; onAuth(j.user);
       }
-    }catch(e){toast(e.message,'error')} finally{setLoading(false)}
+    }catch(e){
+      let msg=e.message||'Ошибка';
+      if(msg.includes('pattern')){
+        msg='Сессия повреждена (pattern). Очистите кэш браузера (localStorage) и попробуйте снова.';
+        try{ localStorage.clear(); }catch{}
+      }
+      toast(msg,'error')
+    } finally{setLoading(false)}
   };
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-violet-600 via-indigo-600 to-cyan-500">
@@ -105,7 +179,12 @@ function Messenger({user,setUser,toast}){
   const [typing,setTyping]=useState(null);
   const [showInfo,setShowInfo]=useState(false);
   const [showNew,setShowNew]=useState(false);
-  const [theme,setTheme]=useState(localStorage.getItem('flux_theme')||'dark');
+  const [theme,setTheme]=useState(()=>{
+    try{
+      const t=(localStorage.getItem('flux_theme')||'dark').replace(/["'\s]/g,'');
+      return (t==='light'||t==='dark') ? t : 'dark';
+    }catch{ return 'dark'; }
+  });
   const [replyTo,setReplyTo]=useState(null);
   const [editing,setEditing]=useState(null);
   const [searchMsg,setSearchMsg]=useState('');
@@ -115,7 +194,13 @@ function Messenger({user,setUser,toast}){
   const fileRef=useRef(null);
   const mediaRecorderRef=useRef(null);
 
-  useEffect(()=>{document.documentElement.className=theme; localStorage.setItem('flux_theme',theme)},[theme]);
+  useEffect(()=>{
+    try{
+      const safe = (theme==='light'||theme==='dark') ? theme : 'dark';
+      document.documentElement.className=safe;
+      localStorage.setItem('flux_theme',safe);
+    }catch(e){ console.warn('theme save failed', e); }
+  },[theme]);
 
   const loadChats=async()=>{
     const r=await apiFetch('/api/chats'+(search?'?search='+encodeURIComponent(search):'')); if(r.ok) setChats(await r.json());
@@ -133,20 +218,35 @@ function Messenger({user,setUser,toast}){
   useEffect(()=>{
     const token=getToken(); if(!token) return;
     const proto=location.protocol==='https:'?'wss:':'ws:';
-    const ws=new WebSocket(`${proto}//${location.host}/ws?token=${token}`);
+    let ws;
+    try{
+      ws=new WebSocket(`${proto}//${location.host}/ws?token=${encodeURIComponent(token)}`);
+    }catch(e){
+      console.error('WebSocket URL pattern error', e);
+      // token likely corrupted with invalid chars -> clear and force relogin
+      if(e && e.message && e.message.includes('pattern')){
+        try{ localStorage.removeItem('flux_access'); localStorage.removeItem('flux_refresh'); }catch{}
+        toast('Сессия повреждена — войдите заново');
+      }
+      return;
+    }
     wsRef.current=ws;
     ws.onmessage=(e)=>{
-      const d=JSON.parse(e.data);
+      let d; try{ d=JSON.parse(e.data); }catch{ return; }
       if(d.type==='message:new' && d.message.chat_id===selected?.id) setMessages(m=>[...m,d.message]);
-      else if(d.type==='message:new') { loadChats(); if(Notification.permission==='granted') new Notification('Flux: новое сообщение',{body:d.message.text}); }
+      else if(d.type==='message:new') {
+        loadChats();
+        try{ if('Notification' in window && Notification.permission==='granted') new Notification('Flux: новое сообщение',{body: String(d.message.text||'📎 Медиа')}); }catch(err){ console.warn('Notification failed', err); }
+      }
       if(d.type==='message:edit' && d.message.chat_id===selected?.id) setMessages(m=>m.map(x=>x.id===d.message.id?d.message:x));
       if(d.type==='typing:start' && d.chat_id===selected?.id) {setTyping(d.display_name); setTimeout(()=>setTyping(null),2500)}
       if(d.type==='typing:stop') setTyping(null);
       if(d.type==='message:delete') setMessages(m=>m.filter(x=>x.id!==d.message_id));
       if(d.type==='call:incoming') toast(`Входящий звонок от ${d.from?.display_name||d.from}`);
     };
-    ws.onopen=()=> ws.send(JSON.stringify({type:'ping'}));
-    return()=>ws.close();
+    ws.onopen=()=> { try{ ws.send(JSON.stringify({type:'ping'})); }catch{} };
+    ws.onerror=(e)=>{ console.warn('WS error', e); };
+    return()=>{ try{ ws.close(); }catch{} };
   },[selected]);
 
   // notify permission
@@ -214,7 +314,7 @@ function Messenger({user,setUser,toast}){
         <div className="flex items-center gap-2"><div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-600 to-cyan-400 flex items-center justify-center text-white font-bold">⚡</div><span className="font-bold dark:text-white">Flux</span></div>
         <div className="flex items-center gap-2">
           <button onClick={()=>setTheme(theme==='dark'?'light':'dark')} className="w-9 h-9 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center">{theme==='dark'?'☀️':'🌙'}</button>
-          <img src={user.avatar_url||`https://api.dicebear.com/7.x/initials/svg?seed=${user.display_name}`} className="w-8 h-8 rounded-full object-cover"/>
+          <img src={user.avatar_url||`https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(user.display_name||'user')}`} className="w-8 h-8 rounded-full object-cover"/>
         </div>
       </div>
 
@@ -239,7 +339,7 @@ function Messenger({user,setUser,toast}){
             {filteredChats.map(c=>(
               <div key={c.id} onClick={()=>setSelected(c)} onContextMenu={e=>{e.preventDefault(); if(confirm('Закрепить / удалить?')){}}}
                    className={`flex gap-3 px-3 py-3 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50 border-b border-zinc-100 dark:border-zinc-800/50 ${selected?.id===c.id?'bg-violet-50 dark:bg-violet-950/30':''}`}>
-                <div className="relative shrink-0"><img src={c.avatar_url||`https://api.dicebear.com/7.x/initials/svg?seed=${c.title}`} className="w-12 h-12 rounded-full object-cover"/><span className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-white dark:border-[#0f0f18] ${c.participants?.some(p=>p.is_online)?'bg-emerald-500':'bg-zinc-300'}`}></span></div>
+                <div className="relative shrink-0"><img src={c.avatar_url||`https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(c.title||'chat')}`} className="w-12 h-12 rounded-full object-cover"/><span className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-white dark:border-[#0f0f18] ${c.participants?.some(p=>p.is_online)?'bg-emerald-500':'bg-zinc-300'}`}></span></div>
                 <div className="flex-1 min-w-0">
                   <div className="flex justify-between items-start"><span className="font-medium text-sm dark:text-white truncate">{c.title}</span><span className="text-[11px] text-zinc-400 shrink-0 ml-2">{c.last_message? new Date(c.last_message.created_at).toLocaleTimeString().slice(0,5):''}</span></div>
                   <div className="flex justify-between items-center"><span className="text-xs text-zinc-500 truncate pr-2">{c.last_message? (c.last_message.text?.slice(0,30)||'📎 Медиа') : 'Нет сообщений'}</span>{c.unread_count>0 && <span className="bg-violet-600 text-white text-[11px] px-1.5 py-0.5 rounded-full min-w-[18px] text-center">{c.unread_count}</span>}</div>
@@ -248,7 +348,7 @@ function Messenger({user,setUser,toast}){
             ))}
           </div>
           <div className="p-3 border-t border-zinc-200 dark:border-zinc-800 flex items-center gap-3 bg-white dark:bg-[#0f0f18]">
-            <img src={user.avatar_url||`https://api.dicebear.com/7.x/initials/svg?seed=${user.display_name}`} className="w-9 h-9 rounded-full"/>
+            <img src={user.avatar_url||`https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(user.display_name||'user')}`} className="w-9 h-9 rounded-full"/>
             <div className="flex-1 min-w-0"><div className="text-sm font-medium dark:text-white truncate">{user.display_name}</div><div className="text-xs text-emerald-500">● в сети</div></div>
             <button onClick={logout} className="text-xs px-3 py-2 rounded-full bg-zinc-100 dark:bg-zinc-800 dark:text-white">Выйти</button>
           </div>
@@ -268,7 +368,7 @@ function Messenger({user,setUser,toast}){
               {/* chat header */}
               <div className="h-[60px] shrink-0 flex items-center gap-3 px-3 sm:px-4 bg-white dark:bg-[#14141e] border-b border-zinc-200 dark:border-zinc-800">
                 <button onClick={()=>setSelected(null)} className="lg:hidden w-9 h-9 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center">←</button>
-                <img src={selected.avatar_url||`https://api.dicebear.com/7.x/initials/svg?seed=${selected.title}`} className="w-9 h-9 rounded-full"/>
+                <img src={selected.avatar_url||`https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(selected.title||'chat')}`} className="w-9 h-9 rounded-full"/>
                 <div className="flex-1 min-w-0" onClick={()=>setShowInfo(v=>!v)}>
                   <div className="font-medium text-sm dark:text-white truncate">{selected.title} {selected.type!=='private' && <span className="text-xs text-zinc-400">• {selected.participants?.length} участников</span>}</div>
                   <div className="text-xs text-emerald-500 truncate">{typing? `${typing} печатает...`: selected.participants?.some(p=>p.is_online)? 'в сети' : 'был(а) недавно'}</div>
@@ -363,7 +463,7 @@ function Messenger({user,setUser,toast}){
             {selected ? (
               <>
                 <div className="flex flex-col items-center text-center">
-                  <img src={selected.avatar_url||`https://api.dicebear.com/7.x/initials/svg?seed=${selected.title}`} className="w-20 h-20 rounded-full"/>
+                  <img src={selected.avatar_url||`https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(selected.title||'chat')}`} className="w-20 h-20 rounded-full"/>
                   <div className="font-semibold mt-2 dark:text-white">{selected.title}</div>
                   <div className="text-xs text-zinc-500">{selected.type} • {selected.participants?.length} участников</div>
                   <div className="text-xs mt-1 bg-zinc-100 dark:bg-zinc-800 px-2 py-1 rounded-full dark:text-white">Приглашение: {selected.invite_link}</div>
@@ -378,7 +478,7 @@ function Messenger({user,setUser,toast}){
                   <div className="space-y-2 max-h-[40vh] overflow-y-auto">
                     {selected.participants?.map(p=>(
                       <div key={p.id} className="flex items-center gap-2">
-                        <img src={p.avatar_url||`https://api.dicebear.com/7.x/initials/svg?seed=${p.display_name}`} className="w-8 h-8 rounded-full"/>
+                        <img src={p.avatar_url||`https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(p.display_name||'user')}`} className="w-8 h-8 rounded-full"/>
                         <div className="flex-1 min-w-0"><div className="text-sm dark:text-white truncate">{p.display_name} {p.role==='creator'&&'👑'}</div><div className="text-xs text-zinc-500">@{p.username}</div></div>
                         <span className={`w-2 h-2 rounded-full ${p.is_online?'bg-emerald-500':'bg-zinc-300'}`}></span>
                       </div>
@@ -432,7 +532,7 @@ function NewChat({onClose,onCreate}){
         <div className="mt-3 space-y-2 max-h-[40vh] overflow-y-auto">
           {users.map(u=>(
             <div key={u.id} onClick={()=>toggle(u)} className={`flex items-center gap-3 p-2 rounded-xl cursor-pointer ${sel.find(s=>s.id===u.id)?'bg-violet-50 dark:bg-violet-950/30 border border-violet-200':''}`}>
-              <img src={u.avatar_url||`https://api.dicebear.com/7.x/initials/svg?seed=${u.display_name}`} className="w-9 h-9 rounded-full"/>
+              <img src={u.avatar_url||`https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(u.display_name||'user')}`} className="w-9 h-9 rounded-full"/>
               <div className="flex-1"><div className="text-sm font-medium dark:text-white">{u.display_name}</div><div className="text-xs text-zinc-500">@{u.username} • {u.phone}</div></div>
               {sel.find(s=>s.id===u.id) && <span className="text-violet-600">✓</span>}
             </div>
@@ -463,7 +563,7 @@ function Profile({user,setUser,toast}){
   return (
     <div className="space-y-3">
       <div className="flex flex-col items-center">
-        <img src={form.avatar_url||`https://api.dicebear.com/7.x/initials/svg?seed=${form.display_name}`} className="w-20 h-20 rounded-full object-cover"/>
+        <img src={form.avatar_url||`https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(form.display_name||'user')}`} className="w-20 h-20 rounded-full object-cover"/>
         <label className="mt-2 text-xs px-3 py-1 rounded-full bg-zinc-100 dark:bg-zinc-800 cursor-pointer dark:text-white">Загрузить аватар<input type="file" className="hidden" onChange={uploadAvatar}/></label>
       </div>
       <input value={form.display_name} onChange={e=>setForm({...form,display_name:e.target.value})} placeholder="Имя" className="w-full px-3 py-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-sm dark:text-white outline-none"/>
@@ -477,12 +577,38 @@ function Profile({user,setUser,toast}){
 }
 
 function App(){
-  const [user,setUser]=useState(()=>{ try{return JSON.parse(localStorage.getItem('flux_user')||'null')}catch{return null}});
+  const [user,setUser]=useState(()=> getStoredUser());
   const [toasts,setToasts]=useState([]);
   const toast=(msg)=>{ const id=Date.now(); setToasts(t=>[...t,{id,msg}]); setTimeout(()=>setToasts(t=>t.filter(x=>x.id!==id)),2500)};
+  // global handler for uncaught DOMException pattern errors (e.g. corrupted storage)
+  useEffect(()=>{
+    const h=(e)=>{
+      const msg=e?.reason?.message || e?.message || '';
+      if(msg && msg.includes('pattern')){
+        console.error('Global pattern error', e);
+        toast('Ошибка: сессия повреждена. Очистите кэш и войдите заново.');
+      }
+    };
+    window.addEventListener('unhandledrejection', h);
+    window.addEventListener('error', h);
+    return()=>{ window.removeEventListener('unhandledrejection', h); window.removeEventListener('error', h); };
+  },[]);
   useEffect(()=>{
     if(!user || !getToken()) return;
-    apiFetch('/api/auth/me').then(async r=>{ if(r.ok) {const j=await r.json(); setUser(j)} else {localStorage.clear(); setUser(null)}});
+    apiFetch('/api/auth/me').then(async r=>{
+      if(r.ok) {
+        try{ const j=await r.json(); setUser(j); }catch{}
+      } else {
+        try{ localStorage.clear(); }catch{}
+        setUser(null);
+      }
+    }).catch(e=>{
+      if(e && e.message && e.message.includes('pattern')){
+        toast('Сессия повреждена — очистите localStorage и войдите заново');
+        try{ localStorage.clear(); }catch{}
+        setUser(null);
+      }
+    });
   },[]);
   if(!user) return <><Auth onAuth={setUser} toast={toast}/><Toasts toasts={toasts}/></>;
   return <><Messenger user={user} setUser={setUser} toast={toast}/><Toasts toasts={toasts}/></>;
